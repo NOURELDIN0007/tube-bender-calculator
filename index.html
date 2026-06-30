@@ -410,6 +410,15 @@
       <input type="number" id="springback" value="2" step="0.5" min="0" max="5">
     </div>
     <div class="field">
+      <label>Mark reference
+        <span class="hint">Which point on the tube you line up to the bender</span>
+      </label>
+      <select id="markRef">
+        <option value="vertex" selected>Vertex / apex (Swagelok roll)</option>
+        <option value="sob">Start of bend (tangent / dial benders)</option>
+      </select>
+    </div>
+    <div class="field">
       <label>End preparation
         <span class="hint">How each tube end connects</span>
       </label>
@@ -625,9 +634,11 @@ function lookupAdjustment(R, thetaDeg, OD) {
 // ============================================================================
 // Compute marks (Swagelok measure-bend method, verified against p.22 example)
 // ============================================================================
+function markRefMode() { return $("markRef") ? $("markRef").value : "vertex"; }
 function computeMarks() {
   const R = +$("clr").value;
   const OD = currentOD();
+  const ref = markRefMode();
   const adjustments = state.bends.map(theta => lookupAdjustment(R, theta, OD));
   const marks = [];
   let cursor = state.legs[0];
@@ -638,7 +649,15 @@ function computeMarks() {
   }
   const lastBend = state.bends.length - 1;
   const total = cursor + state.legs[state.bends.length] - adjustments[lastBend].value;
-  return { marks, total, adjustments };
+  // Mark-reference shift: vertex marks are the apex positions; "start-of-bend"
+  // marks sit back from the apex by the setback R·tan(θ/2). Cut length is unchanged.
+  marks.forEach((m, i) => {
+    const setback = R * Math.tan(state.bends[i] * Math.PI / 360);
+    m.vertex = m.pos;
+    m.setback = setback;
+    if (ref === "sob") m.pos = m.pos - setback;
+  });
+  return { marks, total, adjustments, ref };
 }
 
 // ============================================================================
@@ -1340,9 +1359,10 @@ function drawStraightTube({ marks, total }) {
       <text x="${mx}" y="${tubeY+tubeH/2+26}" fill="#BD4B3F" font-size="11" text-anchor="middle">${fmtPlain(m.pos)}</text>`;
   });
 
+  const refTag = markRefMode() === "sob" ? "START-OF-BEND marks" : "vertex marks";
   const titleTxt = flare
-    ? `STRAIGHT TUBE — cut to ${fmtPlain(rawTotal)} raw · flare both ends · marks from FACE A`
-    : `STRAIGHT TUBE — mark each red position 360° around tube before bending`;
+    ? `STRAIGHT TUBE — cut ${fmtPlain(rawTotal)} raw · flare both ends · ${refTag} from FACE A`
+    : `STRAIGHT TUBE — ${refTag}, mark each 360° around tube before bending`;
   let title = `<text x="20" y="20" fill="#8A857C" font-size="12">${titleTxt}</text>`;
   svg.innerHTML = bg + tube + zones + flareZones + faces + ends + markEls + title;
 }
@@ -1369,7 +1389,8 @@ function renderResults({ marks, total, adjustments }) {
     html += `<div class="row total"><span>CUT TUBE LENGTH</span><span>${fmt(total)}</span></div>`;
     if (isFlare()) html += `<div class="row"><span>End prep</span><span>${endPrepLabel()}</span></div>`;
   }
-  html += `<div style="margin-top:10px;padding:6px;color:#8A857C;font-size:11px">Bend marks (vertex positions, from ${isFlare()&&takeup>0?"finished FACE A":"end A"}):</div>`;
+  const refName = markRefMode() === "sob" ? "START-OF-BEND" : "vertex / apex";
+  html += `<div style="margin-top:10px;padding:6px;color:#8A857C;font-size:11px">Bend marks — <b>${refName}</b> positions, from ${isFlare()&&takeup>0?"finished FACE A":"end A"}:</div>`;
   marks.forEach((m, i) => {
     const adj = adjustments[i];
     const tgt = m.angle + sb;
@@ -1392,6 +1413,7 @@ function renderCutlist({ marks, total, adjustments }) {
   ls.push(`TUBE BEND CUT LIST — ${new Date().toISOString().slice(0,10)}`);
   ls.push(`Method:  Swagelok measure-bend (MS-13-43)`);
   ls.push(`Tube OD: ${$("tubeOD").value}    CLR: ${fmtPlain(R)}`);
+  ls.push(`Mark reference: ${markRefMode() === "sob" ? "START-OF-BEND (tangent)" : "Vertex / apex"}`);
   ls.push(`End prep: ${endPrepLabel()}`);
   ls.push(`Springback compensation: +${sb}°`);
   ls.push(``);
@@ -1410,7 +1432,7 @@ function renderCutlist({ marks, total, adjustments }) {
     ls.push(`  ${label.padEnd(22)}  ${fmtPlain(L)}`);
   });
   ls.push(``);
-  ls.push(`MARKS ON STRAIGHT TUBE (from end A):`);
+  ls.push(`MARKS ON STRAIGHT TUBE (${markRefMode()==="sob"?"START-OF-BEND":"vertex/apex"}, from end A):`);
   marks.forEach(m => {
     ls.push(`  Mark ${m.idx} (${m.angle}° bend)  ${fmtPlain(m.pos)}${unit==="in"?`  (${nearestFrac(m.pos)})`:""}`);
   });
@@ -1531,6 +1553,7 @@ $("tubeOD").addEventListener("change", onTubeODChange);
 ["clr","lmin","springback","flareLen","flareTakeup"].forEach(id => {
   const el = $(id); if (el) el.addEventListener("input", () => recompute(true));
 });
+$("markRef").addEventListener("change", () => recompute(shape === "TABLE" || shape === "DRAW"));
 // End-preparation: show/hide flare fields, set sensible defaults
 $("endPrep").addEventListener("change", () => {
   const flare = $("endPrep").value !== "bottom";
@@ -1584,7 +1607,7 @@ function buildAnnotatedSVG() {
   // ---- Header / title block ----
   s += `<rect x="0" y="0" width="${W}" height="64" fill="#C96442"/>`;
   s += `<text x="20" y="28" fill="#fff" font-size="20" font-weight="bold">Tube Bend Layout — MSU RTS</text>`;
-  s += `<text x="20" y="50" fill="#cdd6e8" font-size="12">Swagelok measure-bend method (MS-13-43) · marks = bend vertex positions</text>`;
+  s += `<text x="20" y="50" fill="#cdd6e8" font-size="12">Swagelok measure-bend method (MS-13-43) · marks = ${markRefMode()==="sob"?"START-OF-BEND":"bend vertex"} positions</text>`;
   const today = new Date().toISOString().slice(0,10);
   s += `<text x="${W-20}" y="28" fill="#fff" font-size="12" text-anchor="end">${today}</text>`;
   s += `<text x="${W-20}" y="46" fill="#cdd6e8" font-size="12" text-anchor="end">Tube OD ${OD} · CLR ${fmtPlain(R)}</text>`;
